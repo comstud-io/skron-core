@@ -3431,6 +3431,15 @@ impl PackedObjectStore {
         count_packed_object_ids(self.algorithm, &idx_paths)
     }
 
+    pub(crate) fn has_object_ids(&self) -> io::Result<bool> {
+        for idx_path in self.idx_paths()?.iter() {
+            if pack_index_object_count(idx_path)? > 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn pack_names(&self) -> io::Result<Vec<String>> {
         let idx_paths = self.idx_paths()?;
         let mut names = Vec::with_capacity(pack_index_list_initial_capacity(idx_paths.len()));
