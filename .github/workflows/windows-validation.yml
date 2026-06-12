@@ -1,0 +1,91 @@
+name: Windows validation
+
+on:
+  push:
+    branches:
+      - test/windows-validation
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows native test
+    runs-on: windows-latest
+    env:
+      GIT_CONFIG_NOSYSTEM: "1"
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare Rust
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+          rustc --version
+          cargo --version
+          git --version
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        run: cargo check --workspace --all-targets
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features
+
+      - name: Test core workspace
+        run: |
+          cargo test -p skron-core --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p skron-primitives --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p skron-git-core --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p skron-git-remote-http --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Test CLI unit surface
+        run: cargo test -p skron-cli --bin skron
+
+      - name: Test CLI integration surface
+        run: |
+          $testFiles = Get-ChildItem crates/skron-cli/tests -Filter *.rs | ForEach-Object { $_.BaseName } | Sort-Object
+          foreach ($testFile in $testFiles) {
+            Write-Host "::group::list tests -p skron-cli --test $testFile"
+            $listOutput = cargo test -p skron-cli --test $testFile -- --list
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $cases = $listOutput | ForEach-Object {
+              if ($_ -match '^([^:]+): test$') { $Matches[1] }
+            }
+            Write-Host "::endgroup::"
+            foreach ($case in $cases) {
+            Write-Host "::group::cargo test -p skron-cli --test $testFile $case"
+            $args = @("test", "-p", "skron-cli", "--test", $testFile, $case, "--", "--exact", "--test-threads=1")
+            $process = Start-Process -FilePath "cargo" -ArgumentList $args -NoNewWindow -PassThru
+            if (-not $process.WaitForExit(300000)) {
+              Stop-Process -Id $process.Id -Force
+              Write-Error "Timed out: cargo test -p skron-cli --test $testFile $case"
+              exit 124
+            }
+            if ($process.ExitCode -ne 0) {
+              exit $process.ExitCode
+            }
+            Write-Host "::endgroup::"
+            }
+          }
+
+      - name: Release build
+        run: |
+          cargo build -p skron-cli --release --bins
+          cargo build -p skron-git-remote-http --release
+
+      - name: Run Windows binaries
+        run: |
+          .\target\release\skron.exe --version
+          .\target\release\skron-git.exe --version
